@@ -1,98 +1,191 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import React, { useEffect, useRef, useState } from "react";
+import { StyleSheet, View, Text, Pressable, Alert } from "react-native";
+import MapView, { Marker, Circle } from "react-native-maps";
+import * as Location from "expo-location";
+import * as TaskManager from "expo-task-manager";
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+const GEOFENCE_TASK = "GEOFENCE_TASK";
+const FRIENDZONE_RADIUS_M = 200; // Max 200 meters
 
-export default function HomeScreen() {
+// Background ENTER / EXIT handler
+TaskManager.defineTask(GEOFENCE_TASK, ({ data, error }) => {
+  if (error) {
+    console.log("Geofence task error:", error);
+    return;
+  }
+  if (!data) return;
+
+  const { eventType, region } = data;
+  const type =
+    eventType === Location.GeofencingEventType.Enter ? "ENTER" : "EXIT";
+
+  console.log(`[FriendZone] ${type}: ${region.identifier}`);
+});
+
+export default function MapScreen() {
+  const [location, setLocation] = useState(null);
+  const [errorMsg, setErrorMsg] = useState(null);
+  const [geofenceCenter, setGeofenceCenter] = useState(null);
+  const [geofencingActive, setGeofencingActive] = useState(false);
+
+  const mapRef = useRef(null);
+
+  useEffect(() => {
+    let watchSub;
+
+    (async () => {
+      const fg = await Location.requestForegroundPermissionsAsync();
+      if (fg.status !== "granted") {
+        setErrorMsg("Permission to access location was denied");
+        return;
+      }
+
+      await Location.requestBackgroundPermissionsAsync();
+
+      const current = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      setLocation(current);
+
+      watchSub = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.Balanced,
+          timeInterval: 3000,
+          distanceInterval: 10,
+        },
+        (loc) => setLocation(loc)
+      );
+    })();
+
+    return () => {
+      if (watchSub) watchSub.remove();
+    };
+  }, []);
+
+  const createFriendZone = async () => {
+    if (!location) return;
+
+    const center = {
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+    };
+
+    try {
+      const already = await Location.hasStartedGeofencingAsync(GEOFENCE_TASK);
+      if (already) await Location.stopGeofencingAsync(GEOFENCE_TASK);
+
+      await Location.startGeofencingAsync(GEOFENCE_TASK, [
+        {
+          identifier: "FriendZone",
+          latitude: center.latitude,
+          longitude: center.longitude,
+          radius: FRIENDZONE_RADIUS_M,
+          notifyOnEnter: true,
+          notifyOnExit: true,
+        },
+      ]);
+
+      // 🔥 ONLY now make it visible
+      setGeofenceCenter(center);
+      setGeofencingActive(true);
+
+      // Zoom to zone
+      if (mapRef.current) {
+        mapRef.current.animateToRegion(
+          {
+            latitude: center.latitude,
+            longitude: center.longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          },
+          600
+        );
+      }
+    } catch (e) {
+      console.log("FriendZone error:", e);
+      Alert.alert("Could not create FriendZone", String(e?.message ?? e));
+    }
+  };
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+    <View style={styles.container}>
+      {location ? (
+        <MapView
+          ref={mapRef}
+          style={styles.map}
+          mapType="satellite"
+          initialRegion={{
+            latitude: location.coords.latitude,
+            longitude: location.coords.longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          }}
+          showsUserLocation
+          showsMyLocationButton={false}
+        >
+          <Marker
+            coordinate={{
+              latitude: location.coords.latitude,
+              longitude: location.coords.longitude,
+            }}
+            title="You"
+          />
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+          {/* 👇 NOT rendered until button pressed */}
+          {geofenceCenter && (
+            <Circle
+              center={geofenceCenter}
+              radius={FRIENDZONE_RADIUS_M}
+              strokeWidth={2}
+            />
+          )}
+        </MapView>
+      ) : (
+        <View style={styles.loading}>
+          <Text>{errorMsg || "Waiting for location..."}</Text>
+        </View>
+      )}
+
+      {/* Center FriendZone Button */}
+      <Pressable
+        style={[
+          styles.friendZoneButton,
+          geofencingActive && styles.friendZoneButtonActive,
+        ]}
+        onPress={createFriendZone}
+      >
+        <Text style={styles.friendZoneText}>
+          {geofencingActive ? "FriendZone Active" : "FriendZone"}
+        </Text>
+      </Pressable>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  container: { flex: 1 },
+  map: { width: "100%", height: "100%" },
+  loading: { flex: 1, alignItems: "center", justifyContent: "center" },
+
+  friendZoneButton: {
+    position: "absolute",
+    top: "50%",
+    left: "50%",
+    transform: [{ translateX: -100 }, { translateY: -25 }],
+    width: 200,
+    paddingVertical: 14,
+    borderRadius: 999,
+    borderWidth: 2,
+    borderColor: "blue",
+    backgroundColor: "rgba(255,255,255,0.95)",
+    alignItems: "center",
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  friendZoneButtonActive: {
+    borderColor: "green",
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  friendZoneText: {
+    fontWeight: "800",
+    fontSize: 16,
   },
 });
